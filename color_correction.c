@@ -202,7 +202,7 @@ void Grayscale(unsigned char *Input, unsigned char *Output, int Width, int Heigh
             unsigned char *pOutput = Output + (Y * Width);
             unsigned char *pInput = Input + (Y * Width);
             for (unsigned int X = 0; X < Width; X++) {
-                pOutput[X] = ClampToByte(pInput[X]);
+                pOutput[X] = pInput[X];
             }
         }
     } else {
