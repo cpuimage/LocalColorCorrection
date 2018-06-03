@@ -196,13 +196,13 @@ void BoxBlurGrayscale(unsigned char *input, unsigned char *output, int Width, in
     free(ColOffset);
 }
 
-void InvertGrayscale(unsigned char *Input, unsigned char *Output, int Width, int Height, int Channels) {
+void Grayscale(unsigned char *Input, unsigned char *Output, int Width, int Height, int Channels) {
     if (Channels == 1) {
         for (unsigned int Y = 0; Y < Height; Y++) {
             unsigned char *pOutput = Output + (Y * Width);
             unsigned char *pInput = Input + (Y * Width);
             for (unsigned int X = 0; X < Width; X++) {
-                pOutput[X] = (unsigned char) (255 - pInput[X]);
+                pOutput[X] = ClampToByte(pInput[X]);
             }
         }
     } else {
@@ -210,8 +210,7 @@ void InvertGrayscale(unsigned char *Input, unsigned char *Output, int Width, int
             unsigned char *pOutput = Output + (Y * Width);
             unsigned char *pInput = Input + (Y * Width * Channels);
             for (unsigned int X = 0; X < Width; X++) {
-                pOutput[X] = (unsigned char) (255 - ClampToByte(
-                        (21842 * pInput[0] + 21842 * pInput[1] + 21842 * pInput[2]) >> 16));
+                pOutput[X] = ClampToByte(((21842 * pInput[0] + 21842 * pInput[1] + 21842 * pInput[2]) >> 16));
                 pInput += Channels;
             }
         }
@@ -223,19 +222,20 @@ void LocalColorCorrection(unsigned char *Input, unsigned char *Output, int Width
     if (Mask == NULL)
         return;
     unsigned char LocalLut[256 * 256];
-    for (int mask = 0; mask < 256; ++mask) {
+    for (int mask = 0; mask < 256; mask++) {
         unsigned char *pLocalLut = LocalLut + (mask << 8);
-        for (int pix = 0; pix < 256; ++pix) {
-            pLocalLut[pix] = ClampToByte(255.0f * powf(pix / 255.0f, powf(2.0f, (128.0f - mask) / 128.0f)));
+        for (int pix = 0; pix < 256; pix++) {
+            pLocalLut[pix] = ClampToByte(255.0f * powf(pix / 255.0f, powf(2.0f, (128.0f - (255.0f - mask)) / 128.0f)));
         }
     }
-    InvertGrayscale(Input, Output, Width, Height, Channels);
+    Grayscale(Input, Output, Width, Height, Channels);
     int Radius = (MAX(Width, Height) / 512) + 1;
     BoxBlurGrayscale(Output, Mask, Width, Height, Radius);
     for (int Y = 0; Y < Height; Y++) {
         unsigned char *pOutput = Output + (Y * Width * Channels);
         unsigned char *pInput = Input + (Y * Width * Channels);
         unsigned char *pMask = Mask + (Y * Width);
+
         for (int X = 0; X < Width; X++) {
             unsigned char *pLocalLut = LocalLut + (pMask[X] << 8);
             for (int C = 0; C < Channels; C++) {
@@ -246,6 +246,40 @@ void LocalColorCorrection(unsigned char *Input, unsigned char *Output, int Width
         }
     }
     free(Mask);
+}
+
+void LocalExponentialCorrection(unsigned char *Input, unsigned char *Output, int Width, int Height, int Channels) {
+    unsigned char *Luminance = (unsigned char *) malloc(Width * Height * 2 * sizeof(unsigned char));
+    unsigned char *Mask = Luminance + (Width * Height);
+    if (Luminance == NULL)
+        return;
+    unsigned char LocalLut[256 * 256];
+    for (int mask = 0; mask < 256; mask++) {
+        unsigned char *pLocalLut = LocalLut + (mask << 8);
+        for (int pix = 0; pix < 256; pix++) {
+            pLocalLut[pix] = ClampToByte(255.0f * powf(pix / 255.0f, powf(2.0f, (128.0f - (255.0f - mask)) / 128.0f)));
+        }
+    }
+    Grayscale(Input, Luminance, Width, Height, Channels);
+    int Radius = (MAX(Width, Height) / 512) + 1;
+    BoxBlurGrayscale(Luminance, Mask, Width, Height, Radius);
+    for (int Y = 0; Y < Height; Y++) {
+        unsigned char *pOutput = Output + (Y * Width * Channels);
+        unsigned char *pInput = Input + (Y * Width * Channels);
+        unsigned char *pMask = Mask + (Y * Width);
+        unsigned char *pLuminance = Luminance + (Y * Width);
+        for (int X = 0; X < Width; X++) {
+            unsigned char *pLocalLut = LocalLut + (pMask[X] << 8);
+            for (int C = 0; C < Channels; C++) {
+                pOutput[C] = ClampToByte(
+                        (pLocalLut[pLuminance[X]] * (pInput[C] + pLuminance[X]) / (pLuminance[X] + 1) + pInput[C] -
+                         pLuminance[X]) >> 1);
+            }
+            pOutput += Channels;
+            pInput += Channels;
+        }
+    }
+    free(Luminance);
 }
 
 int main(int argc, char **argv) {
@@ -280,7 +314,8 @@ int main(int argc, char **argv) {
             printf("load: %s fail!\n ", szfile);
         }
         startTime = now();
-        LocalColorCorrection(inputImage, outputImg, Width, Height, Channels);
+        //  LocalColorCorrection(inputImage, outputImg, Width, Height, Channels);
+        LocalExponentialCorrection(inputImage, outputImg, Width, Height, Channels);
         double nProcessTime = calcElapsed(startTime, now());
 
         printf("process time: %d ms.\n ", (int) (nProcessTime * 1000));
